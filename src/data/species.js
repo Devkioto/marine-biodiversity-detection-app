@@ -1,0 +1,32 @@
+export const speciesSamples = [
+  {
+    id: 1,
+    species: "Chaetodon trifascialis",
+    common: "Chevron butterflyfish",
+    confidence: 0.98,
+    status: "Native",
+    type: "Coral reef species",
+    bbox: [144, 88, 368, 244],
+    timestamp: "2026-06-17 21:32",
+  },
+  {
+    id: 2,
+    species: "Dascyllus reticulatus",
+    common: "Reticulate dascyllus",
+    confidence: 0.95,
+    status: "Native",
+    type: "Damselfish",
+    bbox: [94, 128, 238, 302],
+    timestamp: "2026-06-17 21:34",
+  },
+  {
+    id: 3,
+    species: "Acanthurus nigrofuscus",
+    common: "Brown surgeonfish",
+    confidence: 0.93,
+    status: "Herbivore",
+    type: "Reef grazer",
+    bbox: [382, 118, 548, 286],
+    timestamp: "2026-06-17 21:35",
+  },
+];
