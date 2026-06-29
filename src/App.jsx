@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, useEffect } from "react";
 import { api, normalizeDetections, dedupeByTrack } from "./services/api";
 import { speciesSamples } from "./data/species";
 
@@ -74,8 +74,15 @@ function SpeciesCard({ item, selected, onClick }) {
 
 function UploadPanel({ onDetections }) {
   const [file, setFile] = useState(null);
+  const [previewUrl, setPreviewUrl] = useState(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("Ready for MP4, AVI, MOV, or a single image.");
+
+  useEffect(() => {
+    return () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    };
+  }, [previewUrl]);
 
   async function detectVideo() {
     if (!file) {
@@ -96,11 +103,13 @@ function UploadPanel({ onDetections }) {
         headers: { "Content-Type": "multipart/form-data" },
         timeout: isImage ? 12000 : 0, // video runs synchronously server-side and can take minutes
       });
-      const detections = isImage ? data.detections : dedupeByTrack(data.detections);
-      onDetections(normalizeDetections(detections));
+      const raw = isImage ? data.detections : dedupeByTrack(data.detections);
+      const normalized = normalizeDetections(raw);
+      onDetections({ detections: normalized, species_summary: data.species_summary ?? null, annotated_video_url: data.annotated_video_url ?? null });
       setMessage("Detection completed by microservice.");
     } catch {
-      onDetections(speciesSamples);
+      const normalized = normalizeDetections(speciesSamples);
+      onDetections({ detections: normalized, species_summary: null, annotated_video_url: null });
       setMessage("Microservice not reachable, showing realistic demo detections.");
     } finally {
       setBusy(false);
@@ -108,7 +117,7 @@ function UploadPanel({ onDetections }) {
   }
 
   return (
-    <section id="Video" className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+    <section id="Video" className="relative rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-lg font-bold text-slate-950">Video Or Image Detection</h2>
@@ -130,16 +139,45 @@ function UploadPanel({ onDetections }) {
           type="file"
           accept="video/*,image/*"
           className="sr-only"
-          onChange={(event) => setFile(event.target.files?.[0] || null)}
+          onChange={(event) => {
+            const next = event.target.files?.[0] || null;
+            if (next) {
+              if (previewUrl) URL.revokeObjectURL(previewUrl);
+              setFile(next);
+              setPreviewUrl(URL.createObjectURL(next));
+            } else {
+              if (previewUrl) URL.revokeObjectURL(previewUrl);
+              setFile(null);
+              setPreviewUrl(null);
+            }
+          }}
         />
         <div>
           <div className="mx-auto grid h-12 w-12 place-items-center rounded-lg bg-white text-ocean shadow-sm">
             <Icon name="upload" />
           </div>
           <p className="mt-3 font-semibold text-slate-950">{file ? file.name : "Drop video here or browse files"}</p>
+
+          {previewUrl && file?.type?.startsWith("image/") && (
+            <img src={previewUrl} alt={file.name} className="media-preview mx-auto mt-3 max-h-60 w-auto rounded-md object-contain" />
+          )}
+
+          {previewUrl && file?.type?.startsWith("video/") && (
+            <video src={previewUrl} controls className="media-preview mx-auto mt-3 max-h-72 w-full rounded-md object-contain" />
+          )}
+
           <p className="mt-1 text-sm text-slate-500">Supported: MP4, AVI, MOV, JPG, PNG</p>
         </div>
       </label>
+
+      {busy && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center rounded-lg bg-white/70 backdrop-blur">
+          <div className="flex flex-col items-center gap-3 p-6">
+            <div className="h-12 w-12 animate-spin rounded-full border-4 border-ocean border-t-transparent" aria-hidden="true" />
+            <p className="text-sm font-semibold text-slate-900" aria-live="polite">{message}</p>
+          </div>
+        </div>
+      )}
 
       <p className="mt-3 text-sm text-slate-500">{message}</p>
     </section>
@@ -367,6 +405,8 @@ function Detail({ label, value }) {
 export default function App() {
   const [active, setActive] = useState("Dashboard");
   const [detections, setDetections] = useState(speciesSamples);
+  const [speciesSummary, setSpeciesSummary] = useState(null);
+  const [annotatedUrl, setAnnotatedUrl] = useState(null);
   const [selected, setSelected] = useState(speciesSamples[0]);
   const [modal, setModal] = useState(null);
 
@@ -385,9 +425,27 @@ export default function App() {
     document.getElementById(section)?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  function setDetectionBatch(items) {
-    setDetections(items);
-    setSelected(items[0]);
+  function setDetectionBatch(payload) {
+    // Accept either an array of detections or an object with detections + summary + annotated URL
+    if (Array.isArray(payload)) {
+      setDetections(payload);
+      setSelected(payload[0]);
+      setSpeciesSummary(null);
+      setAnnotatedUrl(null);
+      return;
+    }
+
+    const dets = payload?.detections ?? [];
+    setDetections(dets);
+    setSelected(dets[0]);
+    setSpeciesSummary(payload?.species_summary ?? null);
+    // If annotated_video_url is relative (like '/outputs/...'), prefix with api baseURL
+    if (payload?.annotated_video_url) {
+      const base = api.defaults?.baseURL || "";
+      setAnnotatedUrl(payload.annotated_video_url.startsWith("http") ? payload.annotated_video_url : `${base}${payload.annotated_video_url}`);
+    } else {
+      setAnnotatedUrl(null);
+    }
   }
 
   return (
@@ -400,7 +458,6 @@ export default function App() {
             </div>
             <div>
               <p className="text-sm font-bold text-slate-950 sm:text-base">MARINE BIODIVERSITY DETECTION SYSTEM</p>
-              <p className="hidden text-xs text-slate-500 sm:block">React + Tailwind + axios interface for YOLO microservice</p>
             </div>
           </div>
           <nav className="hidden items-center gap-1 lg:flex">
@@ -479,6 +536,27 @@ export default function App() {
                   <UnderwaterStream onDetections={setDetectionBatch} />
                 </div>
                 <aside className="space-y-4">
+                  {annotatedUrl && (
+                    <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                      <div className="flex items-center justify-between">
+                        <h2 className="text-lg font-bold text-slate-950">Annotated Video</h2>
+                      </div>
+                      <div className="mt-3">
+                        <video src={annotatedUrl} controls className="w-full rounded-md" />
+                        <a href={annotatedUrl} target="_blank" rel="noreferrer" className="mt-2 inline-block text-sm text-sky-600">Open annotated video</a>
+                      </div>
+                      {speciesSummary && (
+                        <div className="mt-3">
+                          <h3 className="text-sm font-semibold text-slate-700">Summary</h3>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {Object.entries(speciesSummary).map(([k, v]) => (
+                              <span key={k} className="rounded-full bg-sky-50 px-3 py-1 text-sm font-semibold text-sky-700">{k}: {v}</span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                     <div className="flex items-center justify-between">
                       <h2 className="text-lg font-bold text-slate-950">Detection Results</h2>
