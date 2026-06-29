@@ -1,7 +1,7 @@
 import axios from "axios";
 
 export const api = axios.create({
-  baseURL: "https://backfire-cloning-factsheet.ngrok-free.dev/",
+  baseURL: "https://backfire-cloning-factsheet.ngrok-free.dev",
   timeout: 12000,
 });
 

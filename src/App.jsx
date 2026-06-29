@@ -72,7 +72,7 @@ function SpeciesCard({ item, selected, onClick }) {
   );
 }
 
-function UploadPanel({ onDetections }) {
+function UploadPanel({ onDetections, onApiStatus }) {
   const [file, setFile] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -105,11 +105,13 @@ function UploadPanel({ onDetections }) {
       });
       const raw = isImage ? data.detections : dedupeByTrack(data.detections);
       const normalized = normalizeDetections(raw);
-      onDetections({ detections: normalized, species_summary: data.species_summary ?? null, annotated_video_url: data.annotated_video_url ?? null });
+      if (onApiStatus) onApiStatus(true);
+      onDetections({ detections: normalized, species_summary: data.species_summary ?? null, annotated_video_url: data.annotated_video_url ?? null, annotated_image_url: data.annotated_image_url ?? null });
       setMessage("Detection completed by microservice.");
     } catch {
       const normalized = normalizeDetections(speciesSamples);
-      onDetections({ detections: normalized, species_summary: null, annotated_video_url: null });
+      if (onApiStatus) onApiStatus(false);
+      onDetections({ detections: normalized, species_summary: null, annotated_video_url: null, annotated_image_url: null });
       setMessage("Microservice not reachable, showing realistic demo detections.");
     } finally {
       setBusy(false);
@@ -121,7 +123,7 @@ function UploadPanel({ onDetections }) {
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-lg font-bold text-slate-950">Video Or Image Detection</h2>
-          <p className="text-sm text-slate-500">Upload media and send it to /detect/video or /detect/image.</p>
+          <p className="text-sm text-slate-500">Upload a video or image to analyze</p>
         </div>
         <button
           type="button"
@@ -187,6 +189,7 @@ function UploadPanel({ onDetections }) {
 function LiveCamera({ onDetections }) {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
+  const streamRef = useRef(null);
   const [streaming, setStreaming] = useState(false);
   const [status, setStatus] = useState("Camera inactive.");
 
@@ -194,10 +197,25 @@ function LiveCamera({ onDetections }) {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true });
       videoRef.current.srcObject = stream;
+      streamRef.current = stream;
       setStreaming(true);
       setStatus("Camera connected. Capture a frame to detect.");
     } catch {
       setStatus("Camera access failed or was blocked by the browser.");
+    }
+  }
+
+  function stopCamera() {
+    try {
+      const s = streamRef.current;
+      if (s) {
+        s.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      }
+      if (videoRef.current) videoRef.current.srcObject = null;
+    } finally {
+      setStreaming(false);
+      setStatus("Camera stopped.");
     }
   }
 
@@ -220,9 +238,13 @@ function LiveCamera({ onDetections }) {
         });
         onDetections(normalizeDetections(data));
         setStatus("Frame detected by microservice.");
+        if (typeof onDetections === "function") {
+          // signal API available via parent callback if provided - parent will handle state
+        }
       } catch {
         onDetections(speciesSamples.slice(0, 2));
         setStatus("Microservice not reachable, showing demo frame detections.");
+        // parent will set API unavailable as needed when UploadPanel reports errors
       }
     }, "image/jpeg", 0.9);
   }
@@ -232,9 +254,9 @@ function LiveCamera({ onDetections }) {
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-lg font-bold text-slate-950">Device Webcam</h2>
-          <p className="text-sm text-slate-500">Uses getUserMedia, then posts frames to /detect/frame.</p>
+          <p className="text-sm text-slate-500">Click start to activate the camera.</p>
         </div>
-        <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
           <button
             type="button"
             onClick={startCamera}
@@ -243,6 +265,14 @@ function LiveCamera({ onDetections }) {
             <Icon name="camera" className="h-4 w-4" />
             Start
           </button>
+            <button
+              type="button"
+              onClick={stopCamera}
+              disabled={!streaming}
+              className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Stop
+            </button>
           <button
             type="button"
             onClick={captureFrame}
@@ -254,8 +284,18 @@ function LiveCamera({ onDetections }) {
           </button>
         </div>
       </div>
-      <div className="mt-5 overflow-hidden rounded-lg bg-slate-950">
+      <div className="mt-5 overflow-hidden rounded-lg bg-slate-950 relative">
         <video ref={videoRef} autoPlay muted playsInline className="aspect-video w-full object-cover" />
+
+        {!streaming && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center text-center">
+            <div className="relative flex items-center justify-center h-32 w-32 rounded-full bg-slate-800/80 text-white">
+              <Icon name="camera" className="h-12 w-12" />
+            </div>
+            <p className="mt-3 text-sm text-slate-400">Camera stopped</p>
+          </div>
+        )}
+
       </div>
       <canvas ref={canvasRef} className="hidden" />
       <p className="mt-3 text-sm text-slate-500">{status}</p>
@@ -287,7 +327,7 @@ function UnderwaterStream({ onDetections }) {
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-lg font-bold text-slate-950">Underwater RTSP Camera</h2>
-          <p className="text-sm text-slate-500">Backend reads the stream with OpenCV and YOLO.</p>
+          <p className="text-sm text-slate-500">Enter the RTSP stream URL to connect.</p>
         </div>
         <button
           type="button"
@@ -319,6 +359,23 @@ function UnderwaterStream({ onDetections }) {
       </div>
     </section>
   );
+}
+
+// Ensure we stop camera if user navigates away/unmounts the component tree
+// (App is single-file so add a global cleanup using beforeunload as well)
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeunload", () => {
+    try {
+      // Best-effort: stop any remaining tracks
+      const vids = document.querySelectorAll("video");
+      vids.forEach((v) => {
+        try {
+          const s = v.srcObject;
+          if (s && s.getTracks) s.getTracks().forEach((t) => t.stop());
+        } catch {}
+      });
+    } catch {}
+  });
 }
 
 function DetectionTable({ detections, onSelect }) {
@@ -407,6 +464,8 @@ export default function App() {
   const [detections, setDetections] = useState(speciesSamples);
   const [speciesSummary, setSpeciesSummary] = useState(null);
   const [annotatedUrl, setAnnotatedUrl] = useState(null);
+  const [annotatedType, setAnnotatedType] = useState(null); // 'video' | 'image'
+  const [apiAvailable, setApiAvailable] = useState(true);
   const [selected, setSelected] = useState(speciesSamples[0]);
   const [modal, setModal] = useState(null);
 
@@ -440,11 +499,17 @@ export default function App() {
     setSelected(dets[0]);
     setSpeciesSummary(payload?.species_summary ?? null);
     // If annotated_video_url is relative (like '/outputs/...'), prefix with api baseURL
-    if (payload?.annotated_video_url) {
+    if (payload?.annotated_image_url) {
+      const base = api.defaults?.baseURL || "";
+      setAnnotatedUrl(payload.annotated_image_url.startsWith("http") ? payload.annotated_image_url : `${base}${payload.annotated_image_url}`);
+      setAnnotatedType("image");
+    } else if (payload?.annotated_video_url) {
       const base = api.defaults?.baseURL || "";
       setAnnotatedUrl(payload.annotated_video_url.startsWith("http") ? payload.annotated_video_url : `${base}${payload.annotated_video_url}`);
+      setAnnotatedType("video");
     } else {
       setAnnotatedUrl(null);
+      setAnnotatedType(null);
     }
   }
 
@@ -531,7 +596,7 @@ export default function App() {
 
               <div className="grid gap-6 xl:grid-cols-[1fr_22rem]">
                 <div className="space-y-6">
-                  <UploadPanel onDetections={setDetectionBatch} />
+                  <UploadPanel onDetections={setDetectionBatch} onApiStatus={setApiAvailable} />
                   <LiveCamera onDetections={setDetectionBatch} />
                   <UnderwaterStream onDetections={setDetectionBatch} />
                 </div>
@@ -539,11 +604,15 @@ export default function App() {
                   {annotatedUrl && (
                     <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                       <div className="flex items-center justify-between">
-                        <h2 className="text-lg font-bold text-slate-950">Annotated Video</h2>
+                        <h2 className="text-lg font-bold text-slate-950">Annotated Output</h2>
                       </div>
                       <div className="mt-3">
-                        <video src={annotatedUrl} controls className="w-full rounded-md" />
-                        <a href={annotatedUrl} target="_blank" rel="noreferrer" className="mt-2 inline-block text-sm text-sky-600">Open annotated video</a>
+                        {annotatedType === "video" ? (
+                          <video src={annotatedUrl} controls className="w-full rounded-md" />
+                        ) : (
+                          <img src={annotatedUrl} alt="Annotated output" className="w-full rounded-md object-contain" />
+                        )}
+                        <a href={annotatedUrl} target="_blank" rel="noreferrer" className="mt-2 inline-block text-sm text-sky-600">Open annotated output</a>
                       </div>
                       {speciesSummary && (
                         <div className="mt-3">
@@ -555,6 +624,14 @@ export default function App() {
                           </div>
                         </div>
                       )}
+                    </div>
+                  )}
+                  {!apiAvailable && (
+                    <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-rose-900">
+                      <div className="flex gap-3">
+                        <Icon name="alert" className="mt-0.5 h-5 w-5 flex-none" />
+                        <p className="text-sm">ai_serve unavailable — detection is running in demo mode.</p>
+                      </div>
                     </div>
                   )}
                   <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
@@ -576,14 +653,7 @@ export default function App() {
                       ))}
                     </div>
                   </div>
-                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-amber-900">
-                    <div className="flex gap-3">
-                      <Icon name="alert" className="mt-0.5 h-5 w-5 flex-none" />
-                      <p className="text-sm">
-                        API calls are wired to http://localhost:8000. Start your FastAPI YOLO service there to replace demo detections with real results.
-                      </p>
-                    </div>
-                  </div>
+                  
                 </aside>
               </div>
 
