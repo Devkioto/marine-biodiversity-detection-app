@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import { api } from "./services/api";
+import { api, normalizeDetections, dedupeByTrack } from "./services/api";
 import { speciesSamples } from "./data/species";
 
 const navItems = ["Dashboard", "Video", "Live Camera", "Underwater", "History"];
@@ -90,11 +90,14 @@ function UploadPanel({ onDetections }) {
     formData.append("file", file);
 
     try {
-      const endpoint = file.type.startsWith("image/") ? "/detect/image" : "/detect/video";
+      const isImage = file.type.startsWith("image/");
+      const endpoint = isImage ? "/detect/image" : "/detect/video";
       const { data } = await api.post(endpoint, formData, {
         headers: { "Content-Type": "multipart/form-data" },
+        timeout: isImage ? 12000 : 0, // video runs synchronously server-side and can take minutes
       });
-      onDetections(data.detections || speciesSamples);
+      const detections = isImage ? data.detections : dedupeByTrack(data.detections);
+      onDetections(normalizeDetections(detections));
       setMessage("Detection completed by microservice.");
     } catch {
       onDetections(speciesSamples);
@@ -171,13 +174,13 @@ function LiveCamera({ onDetections }) {
 
     canvas.toBlob(async (blob) => {
       const formData = new FormData();
-      formData.append("frame", blob, "camera-frame.jpg");
+      formData.append("file", blob, "camera-frame.jpg");
 
       try {
         const { data } = await api.post("/detect/frame", formData, {
           headers: { "Content-Type": "multipart/form-data" },
         });
-        onDetections(data.detections || speciesSamples);
+        onDetections(normalizeDetections(data));
         setStatus("Frame detected by microservice.");
       } catch {
         onDetections(speciesSamples.slice(0, 2));
@@ -230,8 +233,8 @@ function UnderwaterStream({ onDetections }) {
   async function connectStream() {
     setStatus("Connecting to underwater camera stream...");
     try {
-      const { data } = await api.post("/detect/stream", { url });
-      onDetections(data.detections || speciesSamples);
+      const { data } = await api.post("/detect/stream", { rtsp_url: url });
+      onDetections(normalizeDetections(data));
       setConnected(true);
       setStatus("RTSP stream connected through backend.");
     } catch {
